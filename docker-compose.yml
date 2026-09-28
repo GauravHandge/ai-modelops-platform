@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: modelops_postgres
+    environment:
+      POSTGRES_USER: modelops_user
+      POSTGRES_PASSWORD: modelops_password
+      POSTGRES_DB: modelops_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U modelops_user -d modelops_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: modelops_backend
+    environment:
+      - DATABASE_URL=postgresql://modelops_user:modelops_password@postgres:5432/modelops_db
+      - SECRET_KEY=modelops-super-secret-jwt-key-change-in-production-2026
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MODEL_STORE_DIR=/app/storage/models
+      - DATASET_STORE_DIR=/app/storage/datasets
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mlflow:
+        condition: service_started
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.10.0
+    container_name: modelops_mlflow
+    ports:
+      - "5000:5000"
+    command: mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root /mlflow_artifacts --host 0.0.0.0 --port 5000
+    volumes:
+      - mlflow_data:/mlflow_artifacts
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: modelops_frontend
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  prometheus:
+    image: prom/prometheus:v2.49.0
+    container_name: modelops_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - backend
+
+  grafana:
+    image: grafana/grafana:10.3.1
+    container_name: modelops_grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_data:
+  mlflow_data:
+  grafana_data:
